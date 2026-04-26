@@ -1,0 +1,219 @@
+###############################################################################
+# .github/workflows/terraform.yml
+#
+# COMPORTAMENTO:
+#   Push em qualquer branch    → validate + fmt check
+#   Pull Request para main     → validate + plan (resultado comentado no PR)
+#   Merge na main              → apply (com aprovação manual se configurado)
+#
+# SECRETS NECESSÁRIOS (Settings → Secrets and variables → Actions):
+#   AWS_ROLE_ARN          → ARN da role IAM OIDC (ver README.md)
+#   TF_STATE_BUCKET       → nome do bucket S3 de state
+#   N8N_ENCRYPTION_KEY    → openssl rand -hex 32
+#   CLOUDFLARE_API_TOKEN  → token Cloudflare com DNS:Edit
+#   SLACK_WEBHOOK_URL     → opcional, deixe vazio para desabilitar
+###############################################################################
+
+name: "Terraform CI/CD — n8n AWS"
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: terraform-prod
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+env:
+  TF_VERSION:  "1.14.8"
+  AWS_REGION:  "us-east-1"
+  WORKING_DIR: "."
+
+jobs:
+
+  ###########################################################################
+  # JOB 1: Validate — roda em TODO push e PR
+  ###########################################################################
+  validate:
+    name: "Validate"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Instalar Terraform ${{ env.TF_VERSION }}
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configurar credenciais AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region:     ${{ env.AWS_REGION }}
+
+      - name: terraform init
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=prod/n8n/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="use_lockfile=true" \
+            -input=false
+
+      - name: Verificar formatação (terraform fmt)
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          terraform fmt -check -recursive
+          # Se falhar: rode localmente: terraform fmt -recursive
+
+      - name: Validar configuração (terraform validate)
+        working-directory: ${{ env.WORKING_DIR }}
+        run: terraform validate
+
+  ###########################################################################
+  # JOB 2: Plan — roda apenas em Pull Request para main
+  ###########################################################################
+  plan:
+    name: "Plan"
+    runs-on: ubuntu-latest
+    needs: validate
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Instalar Terraform ${{ env.TF_VERSION }}
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configurar credenciais AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region:     ${{ env.AWS_REGION }}
+
+      - name: terraform init
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=prod/n8n/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="use_lockfile=true" \
+            -input=false
+
+      - name: terraform plan
+        id: plan
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          terraform plan \
+            -var="n8n_encryption_key=${{ secrets.N8N_ENCRYPTION_KEY }}" \
+            -var="cloudflare_api_token=${{ secrets.CLOUDFLARE_API_TOKEN }}" \
+            -var="slack_webhook_url=${{ secrets.SLACK_WEBHOOK_URL }}" \
+            -var-file="environments/prod/terraform.tfvars" \
+            -no-color \
+            -out=tfplan 2>&1 | tee plan_output.txt
+        continue-on-error: true
+
+      - name: Comentar resultado do Plan no PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs      = require('fs');
+            const output  = fs.readFileSync('plan_output.txt', 'utf8');
+            const maxLen  = 65000;
+            const display = output.length > maxLen
+              ? output.substring(0, maxLen) + '\n\n... [output truncado — ver logs do workflow]'
+              : output;
+            const status  = '${{ steps.plan.outcome }}' === 'success'
+              ? '✅ Plan executado com sucesso'
+              : '❌ Plan falhou — revisar erros abaixo';
+
+            const body = `## Terraform Plan \`${{ github.event.pull_request.head.sha }}\`
+
+            **Status:** ${status}
+
+            <details>
+            <summary>Expandir resultado completo</summary>
+
+            \`\`\`hcl
+            ${display}
+            \`\`\`
+            </details>
+
+            > Revise as mudanças acima antes de aprovar o merge.
+            > O apply ocorre automaticamente após o merge na \`main\`.`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner:        context.repo.owner,
+              repo:         context.repo.repo,
+              body:         body
+            });
+
+      - name: Falhar se o plan teve erro
+        if: steps.plan.outcome == 'failure'
+        run: exit 1
+
+  ###########################################################################
+  # JOB 3: Apply — roda APENAS após merge na main
+  ###########################################################################
+  apply:
+    name: "Apply"
+    runs-on: ubuntu-latest
+    needs: validate
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    environment: production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Instalar Terraform ${{ env.TF_VERSION }}
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configurar credenciais AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region:     ${{ env.AWS_REGION }}
+
+      - name: terraform init
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=prod/n8n/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="use_lockfile=true" \
+            -input=false
+
+      - name: terraform apply
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          terraform apply \
+            -var="n8n_encryption_key=${{ secrets.N8N_ENCRYPTION_KEY }}" \
+            -var="cloudflare_api_token=${{ secrets.CLOUDFLARE_API_TOKEN }}" \
+            -var="slack_webhook_url=${{ secrets.SLACK_WEBHOOK_URL }}" \
+            -var-file="environments/prod/terraform.tfvars" \
+            -auto-approve \
+            -no-color
+
+      - name: Outputs pós-apply
+        working-directory: ${{ env.WORKING_DIR }}
+        run: terraform output
