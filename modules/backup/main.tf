@@ -1,22 +1,7 @@
 ###############################################################################
 # MODULE: backup
-# S3 logs históricos + AWS Backup diário/semanal + cross-region DR
-#
-# TESTES PÓS-DEPLOY:
-#   aws backup list-backup-jobs --by-state COMPLETED \
-#     --query 'BackupJobs[*].{Resource:ResourceType,Status:State,Date:CompletionDate}'
-#
-#   aws backup list-recovery-points-by-backup-vault \
-#     --backup-vault-name n8n-backup-vault-prod
-#
-#   # TESTAR RESTORE (cria instância separada sem afetar produção):
-#   POINT=$(aws backup list-recovery-points-by-backup-vault \
-#     --backup-vault-name n8n-backup-vault-prod \
-#     --query 'RecoveryPoints[-1].RecoveryPointArn' --output text)
-#   aws backup start-restore-job \
-#     --recovery-point-arn $POINT \
-#     --iam-role-arn <BACKUP_ROLE_ARN> \
-#     --metadata '{"DBInstanceIdentifier":"n8n-restore-test","MultiAZ":"false"}'
+# S3 logs + AWS Backup diario/semanal + cross-region DR
+# CORRECAO: todos os blocos transition em multilinha, minimo 30 dias STANDARD_IA
 ###############################################################################
 
 terraform {
@@ -132,7 +117,6 @@ resource "aws_s3_bucket_policy" "logs" {
       {
         Sid       = "AllowALBLogs"
         Effect    = "Allow"
-        # Account ID do serviço ELB em us-east-1
         Principal = { AWS = "arn:aws:iam::127311923021:root" }
         Action    = "s3:PutObject"
         Resource  = "${aws_s3_bucket.logs.arn}/alb/*"

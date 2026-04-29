@@ -1,24 +1,14 @@
 ###############################################################################
 # MODULE: rds
-# PostgreSQL 15 Multi-AZ + Graviton (db.t4g.medium)
-# Criptografia com chave gerenciada AWS (gratuita)
-# Nota: rotação automática de senha removida — a Lambda gerenciada pela AWS
-# (SecretsManagerRDSPostgreSQLRotationSingleUser) não existe por padrão nas
-# contas. Para habilitar rotação, ative manualmente pelo console AWS após o
-# deploy: Secrets Manager → n8n/prod/db-credentials → Rotation → Enable.
+# PostgreSQL 15.12 Multi-AZ + Graviton (db.t4g.medium)
 #
-# TESTES PÓS-DEPLOY:
-#   aws rds describe-db-instances \
-#     --db-instance-identifier n8n-postgres-prod \
-#     --query 'DBInstances[0].{Status:DBInstanceStatus,Class:DBInstanceClass,MultiAZ:MultiAZ}'
+# CORRECAO CRITICA: output db_host usa .address (apenas hostname)
+# .endpoint retorna "host:porta" — causa falha de conexao no n8n
+# .address retorna apenas o hostname sem porta
 #
-#   # Testar failover Multi-AZ (~60s de downtime esperado):
-#   aws rds reboot-db-instance \
-#     --db-instance-identifier n8n-postgres-prod --force-failover
-#
-# RESERVED INSTANCE (manual — após 1º mês estável):
-#   Console → RDS → Reserved Instances → Purchase
-#   Engine: PostgreSQL | Class: db.t4g.medium | Multi-AZ: Yes | 1 ano | No Upfront
+# Rotacao de senha: removida do Terraform (Lambda gerenciada AWS nao existe
+# por padrao). Ativar manualmente apos deploy:
+# Console -> Secrets Manager -> n8n/prod/db-credentials -> Rotation -> Enable
 ###############################################################################
 
 variable "environment"        {}
@@ -170,7 +160,7 @@ resource "aws_cloudwatch_metric_alarm" "rds_cpu" {
   period              = 120
   statistic           = "Average"
   threshold           = 80
-  alarm_description   = "RDS CPU acima de 80%"
+  alarm_description   = "RDS CPU above 80 percent"
   alarm_actions       = [var.sns_topic_arn]
   ok_actions          = [var.sns_topic_arn]
 
@@ -192,7 +182,7 @@ resource "aws_cloudwatch_metric_alarm" "rds_storage" {
   period              = 300
   statistic           = "Average"
   threshold           = 10737418240
-  alarm_description   = "RDS com menos de 10 GB livre"
+  alarm_description   = "RDS less than 10GB free"
   alarm_actions       = [var.sns_topic_arn]
   ok_actions          = [var.sns_topic_arn]
 
@@ -214,7 +204,7 @@ resource "aws_cloudwatch_metric_alarm" "rds_connections" {
   period              = 60
   statistic           = "Average"
   threshold           = 180
-  alarm_description   = "RDS com mais de 180 conexões (limite 200)"
+  alarm_description   = "RDS connections above 180 of 200 max"
   alarm_actions       = [var.sns_topic_arn]
   ok_actions          = [var.sns_topic_arn]
 
@@ -227,6 +217,10 @@ resource "aws_cloudwatch_metric_alarm" "rds_connections" {
   }
 }
 
+# CORRECAO CRITICA: db_host usa .address (hostname apenas, sem porta)
+# db_endpoint (host:porta) NAO deve ser passado para DB_POSTGRESDB_HOST
+output "db_host"       { value = aws_db_instance.main.address }
+output "db_port"       { value = tostring(aws_db_instance.main.port) }
 output "db_endpoint"   { value = aws_db_instance.main.endpoint }
 output "db_arn"        { value = aws_db_instance.main.arn }
 output "db_secret_arn" { value = aws_secretsmanager_secret.db.arn }

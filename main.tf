@@ -1,34 +1,8 @@
 ###############################################################################
 # n8n Infrastructure — AWS Queue Mode
-# Terraform >= 1.10  |  Provider AWS ~> 6.0  |  Região: us-east-1
-# Custo estimado: ~$413/mês (inclui NAT Gateway próprio ~$33/mês)
-#
-# Decisões de arquitetura:
-#   - NAT Gateway próprio criado pelo módulo network
-#   - WAF removido (Cloudflare proxy + validação de webhook cobrem os riscos)
-#   - KMS removido (chaves gerenciadas AWS são gratuitas e suficientes)
-#   - VPC Endpoints removidos (custo fixo $7/endpoint > custo variável via NAT)
-#   - RDS db.t4g.medium — Graviton, ~20% mais barato que t3, compatível PG15
-#   - Redis cache.t3.small — suficiente para fila Bull MQ com 25 workflows
-#   - ECS Main: 1 task (UI reinicia em ~60s, não afeta execução de workflows)
-#   - Workers mínimo: 1 (autoscale CPU/memória sobe até worker_max_count)
-#   - Container Insights: desabilitado (alarmes ECS padrão são gratuitos)
-#
-# Observabilidade:
-#   - CloudWatch Log Groups com retenção 7 dias + export diário S3
-#   - Lambda publica QueueDepth Redis → CloudWatch a cada minuto
-#   - Alarmes compostos (CPU + fila simultâneos) evitam falsos positivos
-#   - Log-based alarm (erros JSON nos logs do container)
-#   - Logs Insights queries salvas para troubleshooting
-#   - Dashboard de infraestrutura (CPU, memória, fila, RDS, ALB)
-#   - Namespace N8N/Workflows para métricas via put-metric-data
-#
-# Reserved Instances — aplicar manualmente no console após 1º mês estável:
-#   RDS db.t4g.medium  Multi-AZ  1 ano → -$20/mês
-#   Redis cache.t3.small  1 ano        → -$20/mês
-#
-# PRÉ-REQUISITOS (executar uma única vez antes do primeiro apply):
-#   Ver seção "Pré-requisitos" no README.md
+# Terraform >= 1.10  |  AWS Provider ~> 6.0  |  Regiao: us-east-1
+# n8n: imagem customizada no ECR (n8n 1.123.10 + Node 22)
+# Custo estimado: ~$413/mes On-Demand | ~$373/mes com Reserved
 ###############################################################################
 
 terraform {
@@ -50,9 +24,8 @@ terraform {
   }
 
   backend "s3" {
-    # Bucket criado manualmente — ver README.md seção Pré-requisitos
-    # use_lockfile substitui DynamoDB (deprecated desde Terraform 1.10)
-    # Não é necessário criar tabela DynamoDB
+    # Bucket criado manualmente — ver README.md secao Pre-requisitos
+    # use_lockfile substitui DynamoDB (Terraform >= 1.10)
     bucket       = "TROCAR-terraform-state-n8n"
     key          = "prod/n8n/terraform.tfstate"
     region       = "us-east-1"
@@ -101,7 +74,7 @@ provider "cloudflare" {
 data "aws_caller_identity" "current" {}
 
 ###############################################################################
-# MÓDULOS — ordem respeita dependências
+# MODULOS
 ###############################################################################
 
 module "network" {
@@ -109,7 +82,6 @@ module "network" {
   environment = var.environment
   aws_region  = var.aws_region
   vpc_cidr    = var.vpc_cidr
-  # NAT Gateway próprio criado internamente pelo módulo
 }
 
 module "sns" {
@@ -119,12 +91,20 @@ module "sns" {
   slack_webhook_url = var.slack_webhook_url
 }
 
+module "ecr" {
+  source      = "./modules/ecr"
+  environment = var.environment
+  aws_region  = var.aws_region
+  account_id  = data.aws_caller_identity.current.account_id
+}
+
 module "iam" {
   source           = "./modules/iam"
   environment      = var.environment
   aws_region       = var.aws_region
   account_id       = data.aws_caller_identity.current.account_id
   logs_bucket_name = module.backup.logs_bucket_name
+  ecr_repo_arn     = module.ecr.repository_arn
 }
 
 module "backup" {
@@ -202,7 +182,8 @@ module "ecs" {
   execution_role_arn = module.iam.ecs_execution_role_arn
   task_role_arn      = module.iam.ecs_task_role_arn
 
-  db_host        = module.rds.db_endpoint
+  db_host        = module.rds.db_host
+  db_port        = module.rds.db_port
   db_name        = var.db_name
   db_secret_arn  = module.rds.db_secret_arn
   redis_host     = module.redis.primary_endpoint

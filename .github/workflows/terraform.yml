@@ -1,20 +1,15 @@
 ###############################################################################
 # .github/workflows/terraform.yml
 #
-# COMPORTAMENTO:
-#   Push em qualquer branch    → validate + fmt check
-#   Pull Request para main     → validate + plan (resultado comentado no PR)
-#   Merge na main              → apply (com aprovação manual se configurado)
-#
-# SECRETS NECESSÁRIOS (Settings → Secrets and variables → Actions):
-#   AWS_ROLE_ARN          → ARN da role IAM OIDC (ver README.md)
-#   TF_STATE_BUCKET       → nome do bucket S3 de state
-#   N8N_ENCRYPTION_KEY    → openssl rand -hex 32
-#   CLOUDFLARE_API_TOKEN  → token Cloudflare com DNS:Edit
-#   SLACK_WEBHOOK_URL     → opcional, deixe vazio para desabilitar
+# SECRETS NECESSARIOS (Settings -> Secrets and variables -> Actions):
+#   AWS_ROLE_ARN          -> ARN da role IAM OIDC
+#   TF_STATE_BUCKET       -> nome do bucket S3 de state
+#   N8N_ENCRYPTION_KEY    -> openssl rand -hex 32
+#   CLOUDFLARE_API_TOKEN  -> token Cloudflare com DNS:Edit
+#   SLACK_WEBHOOK_URL     -> opcional
 ###############################################################################
 
-name: "Terraform CI/CD — n8n AWS"
+name: "Terraform CI/CD n8n AWS"
 
 on:
   push:
@@ -38,9 +33,6 @@ env:
 
 jobs:
 
-  ###########################################################################
-  # JOB 1: Validate — roda em TODO push e PR
-  ###########################################################################
   validate:
     name: "Validate"
     runs-on: ubuntu-latest
@@ -70,19 +62,14 @@ jobs:
             -backend-config="use_lockfile=true" \
             -input=false
 
-      - name: Verificar formatação (terraform fmt)
+      - name: terraform fmt check
         working-directory: ${{ env.WORKING_DIR }}
-        run: |
-          terraform fmt -check -recursive
-          # Se falhar: rode localmente: terraform fmt -recursive
+        run: terraform fmt -check -recursive
 
-      - name: Validar configuração (terraform validate)
+      - name: terraform validate
         working-directory: ${{ env.WORKING_DIR }}
         run: terraform validate
 
-  ###########################################################################
-  # JOB 2: Plan — roda apenas em Pull Request para main
-  ###########################################################################
   plan:
     name: "Plan"
     runs-on: ubuntu-latest
@@ -127,7 +114,7 @@ jobs:
             -out=tfplan 2>&1 | tee plan_output.txt
         continue-on-error: true
 
-      - name: Comentar resultado do Plan no PR
+      - name: Comentar plan no PR
         uses: actions/github-script@v7
         with:
           script: |
@@ -135,27 +122,12 @@ jobs:
             const output  = fs.readFileSync('plan_output.txt', 'utf8');
             const maxLen  = 65000;
             const display = output.length > maxLen
-              ? output.substring(0, maxLen) + '\n\n... [output truncado — ver logs do workflow]'
+              ? output.substring(0, maxLen) + '\n\n... [output truncado]'
               : output;
             const status  = '${{ steps.plan.outcome }}' === 'success'
-              ? '✅ Plan executado com sucesso'
-              : '❌ Plan falhou — revisar erros abaixo';
-
-            const body = `## Terraform Plan \`${{ github.event.pull_request.head.sha }}\`
-
-            **Status:** ${status}
-
-            <details>
-            <summary>Expandir resultado completo</summary>
-
-            \`\`\`hcl
-            ${display}
-            \`\`\`
-            </details>
-
-            > Revise as mudanças acima antes de aprovar o merge.
-            > O apply ocorre automaticamente após o merge na \`main\`.`;
-
+              ? 'Plan executado com sucesso'
+              : 'Plan falhou - revisar erros abaixo';
+            const body = `## Terraform Plan\n\n**Status:** ${status}\n\n<details><summary>Resultado</summary>\n\n\`\`\`hcl\n${display}\n\`\`\`\n</details>`;
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner:        context.repo.owner,
@@ -163,13 +135,10 @@ jobs:
               body:         body
             });
 
-      - name: Falhar se o plan teve erro
+      - name: Falhar se plan teve erro
         if: steps.plan.outcome == 'failure'
         run: exit 1
 
-  ###########################################################################
-  # JOB 3: Apply — roda APENAS após merge na main
-  ###########################################################################
   apply:
     name: "Apply"
     runs-on: ubuntu-latest
@@ -214,6 +183,6 @@ jobs:
             -auto-approve \
             -no-color
 
-      - name: Outputs pós-apply
+      - name: Outputs pos-apply
         working-directory: ${{ env.WORKING_DIR }}
         run: terraform output

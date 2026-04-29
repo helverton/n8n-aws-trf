@@ -1,21 +1,19 @@
 ###############################################################################
 # outputs.tf
-# Valores expostos após terraform apply.
-# Outputs sensíveis aparecem como [sensitive] nos logs do CI/CD.
 ###############################################################################
 
 output "n8n_url" {
-  description = "URL pública do n8n"
+  description = "URL publica do n8n"
   value       = "https://${var.n8n_domain}"
 }
 
 output "alb_dns_name" {
-  description = "DNS do ALB — Cloudflare aponta CNAME para este valor"
+  description = "DNS do ALB"
   value       = module.ecs.alb_dns_name
 }
 
 output "nat_gateway_ip" {
-  description = "IP público do NAT Gateway — use para whitelist em APIs externas"
+  description = "IP publico do NAT Gateway — usar para whitelist em APIs externas"
   value       = module.network.nat_gateway_ip
 }
 
@@ -24,20 +22,25 @@ output "vpc_id" {
   value       = module.network.vpc_id
 }
 
-output "rds_endpoint" {
-  description = "Endpoint interno do PostgreSQL"
-  value       = module.rds.db_endpoint
+output "ecr_repository_url" {
+  description = "URL do repositorio ECR — usar no n8n_image do tfvars"
+  value       = module.ecr.repository_url
+}
+
+output "rds_host" {
+  description = "Hostname do PostgreSQL (sem porta)"
+  value       = module.rds.db_host
   sensitive   = true
 }
 
 output "redis_endpoint" {
-  description = "Endpoint interno do Redis primário"
+  description = "Endpoint interno do Redis primario"
   value       = module.redis.primary_endpoint
   sensitive   = true
 }
 
 output "logs_bucket" {
-  description = "Bucket S3 de logs históricos"
+  description = "Bucket S3 de logs historicos"
   value       = module.backup.logs_bucket_name
 }
 
@@ -47,7 +50,7 @@ output "ecs_cluster" {
 }
 
 output "worker_service" {
-  description = "Nome do serviço de workers ECS"
+  description = "Nome do servico de workers ECS"
   value       = module.ecs.worker_service_name
 }
 
@@ -57,21 +60,11 @@ output "log_group" {
 }
 
 output "sns_alerts_topic" {
-  description = "ARN do tópico SNS de alertas de infraestrutura"
+  description = "ARN do topico SNS de alertas"
   value       = module.sns.alerts_topic_arn
 }
 
-output "cloudwatch_namespace_workflows" {
-  description = "Namespace CloudWatch para métricas customizadas via put-metric-data"
-  value       = "N8N/Workflows"
-}
-
-output "cloudwatch_namespace_queue" {
-  description = "Namespace CloudWatch para métricas de fila Redis (Lambda)"
-  value       = "N8N/Queue"
-}
-
 output "dashboard_url" {
-  description = "URL direta para o dashboard CloudWatch"
+  description = "URL do dashboard CloudWatch"
   value       = "https://${var.aws_region}.console.aws.amazon.com/cloudwatch/home?region=${var.aws_region}#dashboards:name=n8n-${var.environment}"
 }

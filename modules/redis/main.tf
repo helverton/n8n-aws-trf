@@ -1,20 +1,7 @@
 ###############################################################################
 # MODULE: redis
-# ElastiCache Redis 7 — cache.t3.small Multi-AZ
-# Fila Bull MQ para n8n Queue Mode
-#
-# TESTES PÓS-DEPLOY:
-#   aws elasticache describe-replication-groups \
-#     --replication-group-id n8n-redis-prod \
-#     --query 'ReplicationGroups[0].{Status:Status,NodeType:CacheNodeType}'
-#
-#   # Testar failover (~30s):
-#   aws elasticache test-failover \
-#     --replication-group-id n8n-redis-prod --node-group-id 0001
-#
-# RESERVED NODE (manual — após 1º mês estável):
-#   Console → ElastiCache → Reserved Cache Nodes → Purchase
-#   Node type: cache.t3.small | Redis | 1 ano | No Upfront (2 nós)
+# ElastiCache Redis 7 Multi-AZ
+# Parametro "save" removido — nao existe no Redis 7 via parameter group
 ###############################################################################
 
 variable "environment"        {}
@@ -38,7 +25,6 @@ resource "aws_elasticache_parameter_group" "redis" {
   name   = "n8n-redis7-params-${var.environment}"
   family = "redis7"
 
-  # Notificações de expiração de chaves (útil para debug de jobs expirados)
   parameter {
     name  = "notify-keyspace-events"
     value = "Ex"
@@ -52,7 +38,7 @@ resource "aws_elasticache_parameter_group" "redis" {
 
 resource "aws_elasticache_replication_group" "main" {
   replication_group_id = "n8n-redis-${var.environment}"
-  description          = "n8n Queue Mode - Bull MQ"
+  description          = "n8n Queue Mode Bull MQ"
 
   node_type            = var.node_type
   port                 = 6379
@@ -89,7 +75,7 @@ resource "aws_cloudwatch_metric_alarm" "redis_memory" {
   period              = 120
   statistic           = "Average"
   threshold           = 80
-  alarm_description   = "Redis memória acima de 80%"
+  alarm_description   = "Redis memory above 80 percent"
   alarm_actions       = [var.sns_topic_arn]
   ok_actions          = [var.sns_topic_arn]
 
@@ -111,7 +97,7 @@ resource "aws_cloudwatch_metric_alarm" "redis_cpu" {
   period              = 120
   statistic           = "Average"
   threshold           = 70
-  alarm_description   = "Redis CPU acima de 70%"
+  alarm_description   = "Redis CPU above 70 percent"
   alarm_actions       = [var.sns_topic_arn]
   ok_actions          = [var.sns_topic_arn]
 

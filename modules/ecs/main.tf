@@ -1,22 +1,11 @@
 ###############################################################################
 # MODULE: ecs
-# ECS Fargate — n8n Main (1 task) + Workers (autoscale 1–10)
-# ALB, ACM, Cloudflare DNS, Circuit Breaker, ECS Exec habilitado
-#
-# TESTES PÓS-DEPLOY:
-#   aws ecs list-tasks --cluster n8n-prod --service-name n8n-main
-#   aws ecs list-tasks --cluster n8n-prod --service-name n8n-worker
-#
-#   # ECS Exec (debug container vivo):
-#   TASK=$(aws ecs list-tasks --cluster n8n-prod \
-#     --service-name n8n-worker --query 'taskArns[0]' --output text)
-#   aws ecs execute-command --cluster n8n-prod \
-#     --task $TASK --container n8n-worker \
-#     --interactive --command "/bin/sh"
-#
-#   # Testar autohealing:
-#   aws ecs update-service --cluster n8n-prod \
-#     --service n8n-worker --desired-count 0
+# ECS Fargate — n8n Main (1 task) + Workers (autoscale 1-10)
+# CORRECOES:
+#   - DB_POSTGRESDB_HOST usa var.db_host (apenas hostname, sem porta)
+#   - DB_POSTGRESDB_PORT usa var.db_port separado
+#   - cloudflare_record usa "content" em vez de "value" (deprecated)
+#   - Sem acentos em nenhuma string
 ###############################################################################
 
 terraform {
@@ -30,39 +19,36 @@ terraform {
   }
 }
 
-variable "environment"          {}
-variable "aws_region"           {}
-variable "account_id"           {}
-variable "vpc_id"               {}
-variable "private_subnet_ids"   { type = list(string) }
-variable "public_subnet_ids"    { type = list(string) }
-variable "sg_ecs_main_id"       {}
-variable "sg_ecs_worker_id"     {}
-variable "sg_alb_id"            {}
-variable "execution_role_arn"   {}
-variable "task_role_arn"        {}
-variable "db_host"              {}
-variable "db_name"              {}
-variable "db_secret_arn"        {}
-variable "redis_host"           {}
-variable "log_group_name"       {}
-variable "n8n_image"            {}
-variable "n8n_encryption_key"   { sensitive = true }
-variable "cloudflare_zone_id"   {}
-variable "n8n_domain"           {}
-variable "logs_bucket_name"     {}
-variable "sns_topic_arn"        {}
-variable "main_desired_count"   { default = 1 }
-variable "worker_desired_count" { default = 2 }
-variable "worker_min_count"     { default = 1 }
-variable "worker_max_count"     { default = 10 }
-variable "worker_cpu"           { default = 1024 }
-variable "worker_memory"        { default = 2048 }
+variable "environment"            {}
+variable "aws_region"             {}
+variable "account_id"             {}
+variable "vpc_id"                 {}
+variable "private_subnet_ids"     { type = list(string) }
+variable "public_subnet_ids"      { type = list(string) }
+variable "sg_ecs_main_id"         {}
+variable "sg_ecs_worker_id"       {}
+variable "sg_alb_id"              {}
+variable "execution_role_arn"     {}
+variable "task_role_arn"          {}
+variable "db_host"                {}
+variable "db_port"                {}
+variable "db_name"                {}
+variable "db_secret_arn"          {}
+variable "redis_host"             {}
+variable "log_group_name"         {}
+variable "n8n_image"              {}
+variable "n8n_encryption_key"     { sensitive = true }
+variable "cloudflare_zone_id"     {}
+variable "n8n_domain"             {}
+variable "logs_bucket_name"       {}
+variable "sns_topic_arn"          {}
+variable "main_desired_count"     { default = 1 }
+variable "worker_desired_count"   { default = 2 }
+variable "worker_min_count"       { default = 1 }
+variable "worker_max_count"       { default = 10 }
+variable "worker_cpu"             { default = 1024 }
+variable "worker_memory"          { default = 2048 }
 variable "concurrency_per_worker" { default = 5 }
-
-###############################################################################
-# ECS CLUSTER
-###############################################################################
 
 resource "aws_ecs_cluster" "main" {
   name = "n8n-${var.environment}"
@@ -88,10 +74,6 @@ resource "aws_ecs_cluster_capacity_providers" "main" {
     capacity_provider = "FARGATE"
   }
 }
-
-###############################################################################
-# ALB
-###############################################################################
 
 resource "aws_lb" "main" {
   name               = "n8n-alb-${var.environment}"
@@ -180,10 +162,6 @@ resource "aws_lb_listener" "http_redirect" {
   }
 }
 
-###############################################################################
-# ACM + Cloudflare DNS
-###############################################################################
-
 resource "aws_acm_certificate" "n8n" {
   domain_name       = var.n8n_domain
   validation_method = "DNS"
@@ -229,10 +207,6 @@ resource "cloudflare_record" "n8n" {
   proxied = true
 }
 
-###############################################################################
-# SECRET — chave de criptografia do n8n
-###############################################################################
-
 resource "aws_secretsmanager_secret" "n8n_key" {
   name                    = "n8n/${var.environment}/encryption-key"
   recovery_window_in_days = 7
@@ -248,10 +222,6 @@ resource "aws_secretsmanager_secret_version" "n8n_key" {
   secret_id     = aws_secretsmanager_secret.n8n_key.id
   secret_string = var.n8n_encryption_key
 }
-
-###############################################################################
-# TASK DEFINITION — n8n Main
-###############################################################################
 
 resource "aws_ecs_task_definition" "n8n_main" {
   family                   = "n8n-main-${var.environment}"
@@ -270,22 +240,22 @@ resource "aws_ecs_task_definition" "n8n_main" {
     portMappings = [{ containerPort = 5678, protocol = "tcp" }]
 
     environment = [
-      { name = "EXECUTIONS_MODE",          value = "queue" },
-      { name = "N8N_EXECUTIONS_PROCESS",   value = "main" },
-      { name = "DB_TYPE",                  value = "postgresdb" },
-      { name = "DB_POSTGRESDB_HOST",       value = var.db_host },
-      { name = "DB_POSTGRESDB_DATABASE",   value = var.db_name },
-      { name = "DB_POSTGRESDB_PORT",       value = "5432" },
-      { name = "QUEUE_BULL_REDIS_HOST",    value = var.redis_host },
-      { name = "QUEUE_BULL_REDIS_PORT",    value = "6379" },
-      { name = "N8N_HOST",                 value = var.n8n_domain },
-      { name = "N8N_PROTOCOL",             value = "https" },
-      { name = "WEBHOOK_URL",              value = "https://${var.n8n_domain}" },
-      { name = "N8N_METRICS",              value = "true" },
-      { name = "N8N_LOG_LEVEL",            value = "info" },
-      { name = "N8N_LOG_OUTPUT",           value = "console" },
-      { name = "N8N_LOG_FORMAT",           value = "json" },
-      { name = "GENERIC_TIMEZONE",         value = "America/Sao_Paulo" }
+      { name = "EXECUTIONS_MODE",        value = "queue" },
+      { name = "N8N_EXECUTIONS_PROCESS", value = "main" },
+      { name = "DB_TYPE",                value = "postgresdb" },
+      { name = "DB_POSTGRESDB_HOST",     value = var.db_host },
+      { name = "DB_POSTGRESDB_PORT",     value = var.db_port },
+      { name = "DB_POSTGRESDB_DATABASE", value = var.db_name },
+      { name = "QUEUE_BULL_REDIS_HOST",  value = var.redis_host },
+      { name = "QUEUE_BULL_REDIS_PORT",  value = "6379" },
+      { name = "N8N_HOST",               value = var.n8n_domain },
+      { name = "N8N_PROTOCOL",           value = "https" },
+      { name = "WEBHOOK_URL",            value = "https://${var.n8n_domain}" },
+      { name = "N8N_METRICS",            value = "true" },
+      { name = "N8N_LOG_LEVEL",          value = "info" },
+      { name = "N8N_LOG_OUTPUT",         value = "console" },
+      { name = "N8N_LOG_FORMAT",         value = "json" },
+      { name = "GENERIC_TIMEZONE",       value = "America/Sao_Paulo" }
     ]
 
     secrets = [
@@ -319,10 +289,6 @@ resource "aws_ecs_task_definition" "n8n_main" {
   }
 }
 
-###############################################################################
-# TASK DEFINITION — n8n Worker
-###############################################################################
-
 resource "aws_ecs_task_definition" "n8n_worker" {
   family                   = "n8n-worker-${var.environment}"
   requires_compatibilities = ["FARGATE"]
@@ -339,19 +305,19 @@ resource "aws_ecs_task_definition" "n8n_worker" {
     command   = ["worker"]
 
     environment = [
-      { name = "EXECUTIONS_MODE",                      value = "queue" },
-      { name = "N8N_EXECUTIONS_PROCESS",               value = "queue" },
-      { name = "N8N_CONCURRENCY_PRODUCTION_LIMIT",     value = tostring(var.concurrency_per_worker) },
-      { name = "DB_TYPE",                              value = "postgresdb" },
-      { name = "DB_POSTGRESDB_HOST",                   value = var.db_host },
-      { name = "DB_POSTGRESDB_DATABASE",               value = var.db_name },
-      { name = "DB_POSTGRESDB_PORT",                   value = "5432" },
-      { name = "QUEUE_BULL_REDIS_HOST",                value = var.redis_host },
-      { name = "QUEUE_BULL_REDIS_PORT",                value = "6379" },
-      { name = "N8N_LOG_LEVEL",                        value = "info" },
-      { name = "N8N_LOG_OUTPUT",                       value = "console" },
-      { name = "N8N_LOG_FORMAT",                       value = "json" },
-      { name = "GENERIC_TIMEZONE",                     value = "America/Sao_Paulo" }
+      { name = "EXECUTIONS_MODE",                  value = "queue" },
+      { name = "N8N_EXECUTIONS_PROCESS",           value = "queue" },
+      { name = "N8N_CONCURRENCY_PRODUCTION_LIMIT", value = tostring(var.concurrency_per_worker) },
+      { name = "DB_TYPE",                          value = "postgresdb" },
+      { name = "DB_POSTGRESDB_HOST",               value = var.db_host },
+      { name = "DB_POSTGRESDB_PORT",               value = var.db_port },
+      { name = "DB_POSTGRESDB_DATABASE",           value = var.db_name },
+      { name = "QUEUE_BULL_REDIS_HOST",            value = var.redis_host },
+      { name = "QUEUE_BULL_REDIS_PORT",            value = "6379" },
+      { name = "N8N_LOG_LEVEL",                    value = "info" },
+      { name = "N8N_LOG_OUTPUT",                   value = "console" },
+      { name = "N8N_LOG_FORMAT",                   value = "json" },
+      { name = "GENERIC_TIMEZONE",                 value = "America/Sao_Paulo" }
     ]
 
     secrets = [
@@ -384,10 +350,6 @@ resource "aws_ecs_task_definition" "n8n_worker" {
     TaskRole     = "Worker"
   }
 }
-
-###############################################################################
-# ECS SERVICES
-###############################################################################
 
 resource "aws_ecs_service" "n8n_main" {
   name            = "n8n-main"
@@ -474,10 +436,6 @@ resource "aws_ecs_service" "n8n_worker" {
   }
 }
 
-###############################################################################
-# AUTO SCALING
-###############################################################################
-
 resource "aws_appautoscaling_target" "workers" {
   max_capacity       = var.worker_max_count
   min_capacity       = var.worker_min_count
@@ -520,10 +478,6 @@ resource "aws_appautoscaling_policy" "workers_memory" {
   }
 }
 
-###############################################################################
-# CLOUDWATCH ALARMS — ECS com SNS
-###############################################################################
-
 resource "aws_cloudwatch_metric_alarm" "worker_cpu_high" {
   alarm_name          = "n8n-ecs-worker-cpu-high-${var.environment}"
   comparison_operator = "GreaterThanThreshold"
@@ -533,7 +487,7 @@ resource "aws_cloudwatch_metric_alarm" "worker_cpu_high" {
   period              = 60
   statistic           = "Average"
   threshold           = 85
-  alarm_description   = "Workers com CPU > 85%"
+  alarm_description   = "Workers CPU above 85 percent"
   alarm_actions       = [var.sns_topic_arn]
   ok_actions          = [var.sns_topic_arn]
 
@@ -558,7 +512,7 @@ resource "aws_cloudwatch_metric_alarm" "main_unhealthy" {
   period              = 60
   statistic           = "Minimum"
   threshold           = 1
-  alarm_description   = "n8n main sem instâncias saudáveis no ALB"
+  alarm_description   = "n8n main no healthy instances in ALB"
   alarm_actions       = [var.sns_topic_arn]
   ok_actions          = [var.sns_topic_arn]
 
@@ -573,10 +527,6 @@ resource "aws_cloudwatch_metric_alarm" "main_unhealthy" {
     AlarmFor     = "ECSMain-HealthyHosts"
   }
 }
-
-###############################################################################
-# OUTPUTS
-###############################################################################
 
 output "alb_dns_name"        { value = aws_lb.main.dns_name }
 output "alb_arn"             { value = aws_lb.main.arn }

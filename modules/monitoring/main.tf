@@ -1,22 +1,10 @@
 ###############################################################################
 # MODULE: monitoring
-# CloudWatch Log Groups, Lambda QueueDepth, Metric Filters,
-# Alarmes simples e compostos, Logs Insights queries, Dashboard
-#
-# TESTES PÓS-DEPLOY:
-#   aws logs tail /n8n/prod --follow --filter-pattern "\"level\":\"error\""
-#
-#   aws lambda invoke \
-#     --function-name n8n-queue-depth-prod \
-#     --payload '{}' /tmp/out.json && cat /tmp/out.json
-#
-#   aws cloudwatch get-metric-statistics \
-#     --namespace N8N/Queue \
-#     --metric-name QueueDepth \
-#     --dimensions Name=Environment,Value=prod \
-#     --start-time $(date -u -d '30 minutes ago' +%Y-%m-%dT%H:%M:%SZ) \
-#     --end-time $(date -u +%Y-%m-%dT%H:%M:%SZ) \
-#     --period 60 --statistics Average
+# CloudWatch completo: Log Groups, Lambda QueueDepth, Alarmes, Dashboard
+# CORRECOES:
+#   - Dashboard: region explícito em todos os 13 widgets de metrica
+#   - Sem acentos ou caracteres especiais em strings de recursos AWS
+#   - Escape $$ no heredoc Python da Lambda QueueDepth
 ###############################################################################
 
 variable "environment"        {}
@@ -86,9 +74,9 @@ resource "aws_cloudwatch_log_group" "lambda_exporter" {
 
 ###############################################################################
 # LAMBDA QUEUE DEPTH
-# Lê fila Bull MQ no Redis via TCP (sem biblioteca externa)
-# Publica métricas no namespace N8N/Queue a cada minuto
-# NOTA: $$ é o escape do Terraform para $ literal dentro de heredoc
+# Le fila Bull MQ no Redis via TCP puro (sem biblioteca externa)
+# Publica metricas no namespace N8N/Queue a cada minuto
+# NOTA: $$ e o escape do Terraform para $ literal dentro de heredoc
 ###############################################################################
 
 data "archive_file" "queue_depth" {
@@ -133,7 +121,7 @@ def handler(event, context):
         delayed = redis_cmd(sock, "ZCARD", "bull:jobs:delayed")
         sock.close()
     except Exception as e:
-        print(f"Redis connection error: {e}")
+        print(f"Redis error: {e}")
         waiting = active = failed = delayed = 0
 
     total = waiting + active
@@ -150,13 +138,11 @@ def handler(event, context):
 
     cw.put_metric_data(
         Namespace  = namespace,
-        MetricData = [
-            {**m, 'Dimensions': dimensions, 'Timestamp': time.time()}
-            for m in metrics
-        ]
+        MetricData = [{**m, 'Dimensions': dimensions, 'Timestamp': time.time()}
+                      for m in metrics]
     )
 
-    print(f"Published: waiting={waiting} active={active} failed={failed} delayed={delayed}")
+    print(f"Published: waiting={waiting} active={active} failed={failed}")
     return {'waiting': waiting, 'active': active, 'failed': failed}
     PYTHON
     filename = "index.py"
@@ -251,7 +237,7 @@ resource "aws_lambda_function" "queue_depth" {
 
 resource "aws_cloudwatch_event_rule" "queue_depth_schedule" {
   name                = "n8n-queue-depth-schedule-${var.environment}"
-  description         = "Publica QueueDepth Redis no CloudWatch a cada minuto"
+  description         = "Publish QueueDepth to CloudWatch every minute"
   schedule_expression = "rate(1 minute)"
 
   tags = {
@@ -276,7 +262,7 @@ resource "aws_lambda_permission" "queue_depth_eventbridge" {
 }
 
 ###############################################################################
-# LAMBDA LOG EXPORTER — export diário CloudWatch Logs → S3
+# LAMBDA LOG EXPORTER
 ###############################################################################
 
 data "archive_file" "log_exporter" {
@@ -293,8 +279,6 @@ def handler(event, context):
     start = int(datetime.datetime(yesterday.year, yesterday.month, yesterday.day, 0, 0, 0).timestamp() * 1000)
     end   = int(datetime.datetime(yesterday.year, yesterday.month, yesterday.day, 23, 59, 59).timestamp() * 1000)
     prefix = f"logs/{yesterday.year}/{yesterday.month:02d}/{yesterday.day:02d}"
-
-    print(f"Exportando {os.environ['LOG_GROUP']} para {os.environ['S3_BUCKET']}/{prefix}")
     response = logs.create_export_task(
         taskName          = f"n8n-daily-{yesterday.isoformat()}",
         logGroupName      = os.environ['LOG_GROUP'],
@@ -308,7 +292,6 @@ def handler(event, context):
         time.sleep(10)
         status = logs.describe_export_tasks(taskId=task_id)
         state  = status['exportTasks'][0]['status']['code']
-        print(f"Status: {state}")
         if state in ('COMPLETED', 'FAILED', 'CANCELLED'):
             break
     return {"taskId": task_id, "status": state}
@@ -346,23 +329,15 @@ resource "aws_iam_role_policy" "log_exporter" {
       {
         Sid    = "CreateExportTask"
         Effect = "Allow"
-        Action = [
-          "logs:CreateExportTask",
-          "logs:DescribeExportTasks",
-          "logs:CreateLogGroup",
-          "logs:CreateLogStream",
-          "logs:PutLogEvents"
-        ]
+        Action = ["logs:CreateExportTask", "logs:DescribeExportTasks",
+                  "logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
         Resource = "*"
       },
       {
         Sid      = "WriteToS3"
         Effect   = "Allow"
         Action   = ["s3:PutObject", "s3:GetBucketAcl"]
-        Resource = [
-          "arn:aws:s3:::${var.s3_logs_bucket}",
-          "arn:aws:s3:::${var.s3_logs_bucket}/*"
-        ]
+        Resource = ["arn:aws:s3:::${var.s3_logs_bucket}", "arn:aws:s3:::${var.s3_logs_bucket}/*"]
       }
     ]
   })
@@ -395,7 +370,7 @@ resource "aws_lambda_function" "log_exporter" {
 
 resource "aws_cloudwatch_event_rule" "daily_log_export" {
   name                = "n8n-daily-log-export-${var.environment}"
-  description         = "Export diário logs n8n para S3 às 01:00 UTC (22:00 BRT)"
+  description         = "Daily export n8n logs to S3 at 01:00 UTC"
   schedule_expression = "cron(0 1 * * ? *)"
 
   tags = {
@@ -452,7 +427,7 @@ resource "aws_cloudwatch_log_metric_filter" "connection_errors" {
 }
 
 ###############################################################################
-# ALARMES SIMPLES
+# ALARMES
 ###############################################################################
 
 resource "aws_cloudwatch_metric_alarm" "container_errors_high" {
@@ -465,7 +440,7 @@ resource "aws_cloudwatch_metric_alarm" "container_errors_high" {
   statistic           = "Sum"
   threshold           = 10
   treat_missing_data  = "notBreaching"
-  alarm_description   = "Mais de 10 erros de container em 5 min"
+  alarm_description   = "More than 10 container errors in 5 min"
   alarm_actions       = [var.sns_topic_arn]
   ok_actions          = [var.sns_topic_arn]
 
@@ -486,7 +461,7 @@ resource "aws_cloudwatch_metric_alarm" "connection_errors" {
   statistic           = "Sum"
   threshold           = 0
   treat_missing_data  = "notBreaching"
-  alarm_description   = "Erros de conexão detectados nos logs"
+  alarm_description   = "Connection errors detected in logs"
   alarm_actions       = [var.sns_topic_arn]
   ok_actions          = [var.sns_topic_arn]
 
@@ -507,7 +482,7 @@ resource "aws_cloudwatch_metric_alarm" "log_exporter_errors" {
   statistic           = "Sum"
   threshold           = 0
   treat_missing_data  = "notBreaching"
-  alarm_description   = "Lambda de export de logs diário falhou"
+  alarm_description   = "Daily log export Lambda failed"
   alarm_actions       = [var.sns_topic_arn]
 
   dimensions = { FunctionName = aws_lambda_function.log_exporter.function_name }
@@ -519,10 +494,6 @@ resource "aws_cloudwatch_metric_alarm" "log_exporter_errors" {
   }
 }
 
-###############################################################################
-# ALARMES AUXILIARES — usados apenas pelos compostos, sem SNS isolado
-###############################################################################
-
 resource "aws_cloudwatch_metric_alarm" "worker_cpu_high_aux" {
   alarm_name          = "n8n-worker-cpu-high-aux-${var.environment}"
   comparison_operator = "GreaterThanThreshold"
@@ -532,7 +503,7 @@ resource "aws_cloudwatch_metric_alarm" "worker_cpu_high_aux" {
   period              = 60
   statistic           = "Average"
   threshold           = 70
-  alarm_description   = "CPU workers > 70% (auxiliar para alarme composto)"
+  alarm_description   = "Workers CPU above 70 percent - composite alarm aux"
   treat_missing_data  = "notBreaching"
 
   dimensions = {
@@ -556,7 +527,7 @@ resource "aws_cloudwatch_metric_alarm" "queue_depth_high_aux" {
   period              = 60
   statistic           = "Average"
   threshold           = 50
-  alarm_description   = "Fila com mais de 50 jobs (auxiliar para alarme composto)"
+  alarm_description   = "Queue above 50 jobs - composite alarm aux"
   treat_missing_data  = "notBreaching"
 
   dimensions = { Environment = var.environment }
@@ -577,7 +548,7 @@ resource "aws_cloudwatch_metric_alarm" "worker_memory_high_aux" {
   period              = 60
   statistic           = "Average"
   threshold           = 80
-  alarm_description   = "Memória workers > 80% (auxiliar para alarme composto)"
+  alarm_description   = "Workers memory above 80 percent - composite alarm aux"
   treat_missing_data  = "notBreaching"
 
   dimensions = {
@@ -592,13 +563,9 @@ resource "aws_cloudwatch_metric_alarm" "worker_memory_high_aux" {
   }
 }
 
-###############################################################################
-# ALARMES COMPOSTOS — disparam SNS apenas com condições simultâneas
-###############################################################################
-
 resource "aws_cloudwatch_composite_alarm" "workers_overloaded" {
   alarm_name        = "n8n-workers-overloaded-${var.environment}"
-  alarm_description = "Workers com CPU > 70% E fila com > 50 jobs — autoscale pode não estar respondendo"
+  alarm_description = "Workers CPU above 70 AND queue above 50 jobs"
 
   alarm_rule = "ALARM(${aws_cloudwatch_metric_alarm.worker_cpu_high_aux.alarm_name}) AND ALARM(${aws_cloudwatch_metric_alarm.queue_depth_high_aux.alarm_name})"
 
@@ -614,7 +581,7 @@ resource "aws_cloudwatch_composite_alarm" "workers_overloaded" {
 
 resource "aws_cloudwatch_composite_alarm" "memory_pressure" {
   alarm_name        = "n8n-memory-pressure-${var.environment}"
-  alarm_description = "Workers com memória > 80% E fila crescendo — risco de OOM"
+  alarm_description = "Workers memory above 80 AND queue growing - OOM risk"
 
   alarm_rule = "ALARM(${aws_cloudwatch_metric_alarm.worker_memory_high_aux.alarm_name}) AND ALARM(${aws_cloudwatch_metric_alarm.queue_depth_high_aux.alarm_name})"
 
@@ -629,14 +596,13 @@ resource "aws_cloudwatch_composite_alarm" "memory_pressure" {
 }
 
 ###############################################################################
-# LOGS INSIGHTS QUERIES SALVAS
+# LOGS INSIGHTS QUERIES
 ###############################################################################
 
 resource "aws_cloudwatch_query_definition" "top_errors" {
-  name            = "n8n/${var.environment}/top-erros-por-frequencia"
+  name            = "n8n/${var.environment}/top-errors-by-frequency"
   log_group_names = [var.log_group_name]
-
-  query_string = <<-QUERY
+  query_string    = <<-QUERY
     fields @timestamp, level, message, workflowId, executionId
     | filter level = "error"
     | stats count(*) as total by message
@@ -646,10 +612,9 @@ resource "aws_cloudwatch_query_definition" "top_errors" {
 }
 
 resource "aws_cloudwatch_query_definition" "slow_executions" {
-  name            = "n8n/${var.environment}/execucoes-lentas"
+  name            = "n8n/${var.environment}/slow-executions"
   log_group_names = [var.log_group_name]
-
-  query_string = <<-QUERY
+  query_string    = <<-QUERY
     fields @timestamp, workflowId, executionId, @logStream
     | filter message like "Execution finished"
     | filter duration > 30000
@@ -659,10 +624,9 @@ resource "aws_cloudwatch_query_definition" "slow_executions" {
 }
 
 resource "aws_cloudwatch_query_definition" "errors_by_worker" {
-  name            = "n8n/${var.environment}/erros-por-worker"
+  name            = "n8n/${var.environment}/errors-by-worker"
   log_group_names = [var.log_group_name]
-
-  query_string = <<-QUERY
+  query_string    = <<-QUERY
     fields @timestamp, level, message, @logStream
     | filter level = "error"
     | stats count(*) as total by @logStream
@@ -671,10 +635,9 @@ resource "aws_cloudwatch_query_definition" "errors_by_worker" {
 }
 
 resource "aws_cloudwatch_query_definition" "log_volume_per_hour" {
-  name            = "n8n/${var.environment}/volume-de-logs-por-hora"
+  name            = "n8n/${var.environment}/log-volume-per-hour"
   log_group_names = [var.log_group_name]
-
-  query_string = <<-QUERY
+  query_string    = <<-QUERY
     fields @timestamp
     | stats count(*) as total by bin(1h)
     | sort @timestamp asc
@@ -682,10 +645,9 @@ resource "aws_cloudwatch_query_definition" "log_volume_per_hour" {
 }
 
 resource "aws_cloudwatch_query_definition" "connection_failures" {
-  name            = "n8n/${var.environment}/falhas-de-conexao"
+  name            = "n8n/${var.environment}/connection-failures"
   log_group_names = [var.log_group_name]
-
-  query_string = <<-QUERY
+  query_string    = <<-QUERY
     fields @timestamp, message, @logStream
     | filter message like /ECONNREFUSED|ETIMEDOUT|connection refused|Redis connection/
     | sort @timestamp desc
@@ -694,7 +656,7 @@ resource "aws_cloudwatch_query_definition" "connection_failures" {
 }
 
 ###############################################################################
-# DASHBOARD — todos os widgets com atributos em linhas separadas
+# DASHBOARD — region explicito em todos os 13 widgets de metrica
 ###############################################################################
 
 resource "aws_cloudwatch_dashboard" "n8n" {
@@ -703,134 +665,125 @@ resource "aws_cloudwatch_dashboard" "n8n" {
   dashboard_body = jsonencode({
     widgets = [
       {
-        type = "metric"
-        x    = 0
-        y    = 0
+        type   = "metric"
+        x      = 0
+        y      = 0
         width  = 8
         height = 6
         properties = {
-          title   = "Workers rodando (quantidade)"
+          title   = "Workers running count"
+          region  = var.aws_region
           metrics = [["AWS/ECS", "RunningTaskCount", "ClusterName", var.ecs_cluster_name, "ServiceName", var.ecs_worker_service]]
           period  = 60
           stat    = "Average"
           view    = "timeSeries"
-          annotations = {
-            horizontal = [{ value = var.worker_max_count, label = "Máximo", color = "#ff0000" }]
-          }
+          annotations = { horizontal = [{ value = var.worker_max_count, label = "Max", color = "#ff0000" }] }
         }
       },
       {
-        type = "metric"
-        x    = 8
-        y    = 0
+        type   = "metric"
+        x      = 8
+        y      = 0
         width  = 8
         height = 6
         properties = {
-          title   = "Workers CPU %"
+          title   = "Workers CPU percent"
+          region  = var.aws_region
           metrics = [["AWS/ECS", "CPUUtilization", "ClusterName", var.ecs_cluster_name, "ServiceName", var.ecs_worker_service]]
           period  = 60
           stat    = "Average"
           view    = "timeSeries"
-          annotations = {
-            horizontal = [{ value = 70, label = "Threshold", color = "#ff9900" }]
-          }
+          annotations = { horizontal = [{ value = 70, label = "Threshold", color = "#ff9900" }] }
         }
       },
       {
-        type = "metric"
-        x    = 16
-        y    = 0
+        type   = "metric"
+        x      = 16
+        y      = 0
         width  = 8
         height = 6
         properties = {
-          title   = "Workers Memória %"
+          title   = "Workers memory percent"
+          region  = var.aws_region
           metrics = [["AWS/ECS", "MemoryUtilization", "ClusterName", var.ecs_cluster_name, "ServiceName", var.ecs_worker_service]]
           period  = 60
           stat    = "Average"
           view    = "timeSeries"
-          annotations = {
-            horizontal = [{ value = 80, label = "Threshold", color = "#ff9900" }]
-          }
+          annotations = { horizontal = [{ value = 80, label = "Threshold", color = "#ff9900" }] }
         }
       },
       {
-        type = "metric"
-        x    = 0
-        y    = 6
+        type   = "metric"
+        x      = 0
+        y      = 6
         width  = 12
         height = 6
         properties = {
-          title   = "Fila Redis — jobs por estado"
-          metrics = [
-            ["N8N/Queue", "WaitingJobs",  "Environment", var.environment, { label = "Aguardando" }],
-            ["N8N/Queue", "ActiveJobs",   "Environment", var.environment, { label = "Em execução" }],
-            ["N8N/Queue", "FailedJobs",   "Environment", var.environment, { label = "Falhas" }],
-            ["N8N/Queue", "DelayedJobs",  "Environment", var.environment, { label = "Atrasados" }]
-          ]
-          period = 60
-          stat   = "Average"
-          view   = "timeSeries"
-        }
-      },
-      {
-        type = "metric"
-        x    = 12
-        y    = 6
-        width  = 12
-        height = 6
-        properties = {
-          title   = "QueueDepth total"
+          title   = "Redis queue depth"
+          region  = var.aws_region
           metrics = [["N8N/Queue", "QueueDepth", "Environment", var.environment]]
           period  = 60
           stat    = "Average"
           view    = "timeSeries"
-          annotations = {
-            horizontal = [{ value = 50, label = "Threshold alerta", color = "#ff9900" }]
-          }
+          annotations = { horizontal = [{ value = 50, label = "Threshold", color = "#ff9900" }] }
         }
       },
       {
-        type = "metric"
-        x    = 0
-        y    = 12
+        type   = "metric"
+        x      = 12
+        y      = 6
+        width  = 12
+        height = 6
+        properties = {
+          title   = "Redis failed jobs"
+          region  = var.aws_region
+          metrics = [["N8N/Queue", "FailedJobs", "Environment", var.environment]]
+          period  = 60
+          stat    = "Average"
+          view    = "timeSeries"
+        }
+      },
+      {
+        type   = "metric"
+        x      = 0
+        y      = 12
         width  = 8
         height = 6
         properties = {
-          title   = "RDS CPU %"
+          title   = "RDS CPU percent"
+          region  = var.aws_region
           metrics = [["AWS/RDS", "CPUUtilization", "DBInstanceIdentifier", "n8n-postgres-${var.environment}"]]
           period  = 60
           stat    = "Average"
           view    = "timeSeries"
-          annotations = {
-            horizontal = [{ value = 80, label = "Threshold", color = "#ff9900" }]
-          }
+          annotations = { horizontal = [{ value = 80, label = "Threshold", color = "#ff9900" }] }
         }
       },
       {
-        type = "metric"
-        x    = 8
-        y    = 12
+        type   = "metric"
+        x      = 8
+        y      = 12
         width  = 8
         height = 6
         properties = {
-          title   = "RDS Conexões ativas"
+          title   = "RDS connections"
+          region  = var.aws_region
           metrics = [["AWS/RDS", "DatabaseConnections", "DBInstanceIdentifier", "n8n-postgres-${var.environment}"]]
           period  = 60
           stat    = "Average"
           view    = "timeSeries"
-          annotations = {
-            horizontal = [{ value = 180, label = "Threshold", color = "#ff9900" }]
-          }
+          annotations = { horizontal = [{ value = 180, label = "Threshold", color = "#ff9900" }] }
         }
       },
       {
-        type = "metric"
-        x    = 16
-        y    = 12
+        type   = "metric"
+        x      = 16
+        y      = 12
         width  = 8
         height = 6
         properties = {
-          title   = "RDS Storage livre (bytes)"
+          title   = "RDS free storage bytes"
+          region  = var.aws_region
           metrics = [["AWS/RDS", "FreeStorageSpace", "DBInstanceIdentifier", "n8n-postgres-${var.environment}"]]
           period  = 300
           stat    = "Average"
@@ -838,30 +791,30 @@ resource "aws_cloudwatch_dashboard" "n8n" {
         }
       },
       {
-        type = "metric"
-        x    = 0
-        y    = 18
+        type   = "metric"
+        x      = 0
+        y      = 18
         width  = 8
         height = 6
         properties = {
-          title   = "Redis Memória %"
+          title   = "Redis memory percent"
+          region  = var.aws_region
           metrics = [["AWS/ElastiCache", "DatabaseMemoryUsagePercentage"]]
           period  = 120
           stat    = "Average"
           view    = "timeSeries"
-          annotations = {
-            horizontal = [{ value = 80, label = "Threshold", color = "#ff9900" }]
-          }
+          annotations = { horizontal = [{ value = 80, label = "Threshold", color = "#ff9900" }] }
         }
       },
       {
-        type = "metric"
-        x    = 8
-        y    = 18
+        type   = "metric"
+        x      = 8
+        y      = 18
         width  = 8
         height = 6
         properties = {
-          title   = "ALB — Requisições por minuto"
+          title   = "ALB requests per minute"
+          region  = var.aws_region
           metrics = [["AWS/ApplicationELB", "RequestCount", "LoadBalancer", var.alb_arn_suffix]]
           period  = 60
           stat    = "Sum"
@@ -869,13 +822,14 @@ resource "aws_cloudwatch_dashboard" "n8n" {
         }
       },
       {
-        type = "metric"
-        x    = 16
-        y    = 18
+        type   = "metric"
+        x      = 16
+        y      = 18
         width  = 8
         height = 6
         properties = {
-          title   = "ALB — Latência p95 (s)"
+          title   = "ALB latency p95"
+          region  = var.aws_region
           metrics = [["AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", var.alb_arn_suffix]]
           period  = 60
           stat    = "p95"
@@ -883,30 +837,30 @@ resource "aws_cloudwatch_dashboard" "n8n" {
         }
       },
       {
-        type = "metric"
-        x    = 0
-        y    = 24
+        type   = "metric"
+        x      = 0
+        y      = 24
         width  = 12
         height = 6
         properties = {
-          title   = "Erros de container (logs JSON)"
+          title   = "Container errors"
+          region  = var.aws_region
           metrics = [["N8N/Logs", "ContainerErrors"]]
           period  = 300
           stat    = "Sum"
           view    = "timeSeries"
-          annotations = {
-            horizontal = [{ value = 10, label = "Threshold alerta", color = "#ff0000" }]
-          }
+          annotations = { horizontal = [{ value = 10, label = "Threshold", color = "#ff0000" }] }
         }
       },
       {
-        type = "metric"
-        x    = 12
-        y    = 24
+        type   = "metric"
+        x      = 12
+        y      = 24
         width  = 12
         height = 6
         properties = {
-          title   = "Erros de conexão (banco/Redis)"
+          title   = "Connection errors"
+          region  = var.aws_region
           metrics = [["N8N/Logs", "ConnectionErrors"]]
           period  = 60
           stat    = "Sum"
@@ -914,13 +868,13 @@ resource "aws_cloudwatch_dashboard" "n8n" {
         }
       },
       {
-        type = "log"
-        x    = 0
-        y    = 30
+        type   = "log"
+        x      = 0
+        y      = 30
         width  = 24
         height = 6
         properties = {
-          title  = "Últimos erros (15 min)"
+          title  = "Last errors 15 min"
           query  = "SOURCE '${var.log_group_name}' | fields @timestamp, level, message, workflowId | filter level = \"error\" | sort @timestamp desc | limit 20"
           region = var.aws_region
           view   = "table"

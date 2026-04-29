@@ -1,10 +1,6 @@
 ###############################################################################
 # MODULE: sns
-# Tópico central de alertas — e-mail + Slack opcional via Lambda
-#
-# IMPORTANTE: Após o primeiro apply, confirme a assinatura de e-mail.
-# A AWS envia e-mail para var.alert_email com link de confirmação.
-# Sem confirmar, os alarmes não enviam notificações.
+# Topico de alertas com e-mail + Slack opcional
 ###############################################################################
 
 variable "environment"       {}
@@ -27,10 +23,6 @@ resource "aws_sns_topic_subscription" "email" {
   endpoint  = var.alert_email
 }
 
-###############################################################################
-# LAMBDA DE FORWARDING PARA SLACK — criada apenas se webhook configurado
-###############################################################################
-
 data "archive_file" "slack_forwarder" {
   count       = var.slack_webhook_url != "" ? 1 : 0
   type        = "zip"
@@ -46,22 +38,14 @@ def handler(event, context):
     subject     = sns.get('Subject', 'Alerta n8n')
     message     = sns.get('Message', '')
     color       = "#ff0000" if "ALARM" in subject else "#36a64f"
-    payload = {
-        "attachments": [{
-            "color": color,
-            "title": f":bell: {subject}",
-            "text": message,
-            "footer": "n8n AWS Monitoring",
-            "ts": int(time.time())
-        }]
-    }
+    payload = {"attachments": [{"color": color, "title": subject,
+                                 "text": message, "footer": "n8n AWS",
+                                 "ts": int(time.time())}]}
     data = json.dumps(payload).encode('utf-8')
-    req  = urllib.request.Request(
-        webhook_url, data=data,
-        headers={'Content-Type': 'application/json'}
-    )
+    req  = urllib.request.Request(webhook_url, data=data,
+                                  headers={'Content-Type': 'application/json'})
     with urllib.request.urlopen(req) as resp:
-        print(f"Slack response: {resp.status}")
+        print(f"Slack: {resp.status}")
     return {"statusCode": 200}
     PYTHON
     filename = "index.py"

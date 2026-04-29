@@ -1,19 +1,7 @@
 ###############################################################################
 # MODULE: network
-# VPC, subnets, IGW, EIP, NAT Gateway próprio, Route Tables, Security Groups
-#
-# TESTES PÓS-DEPLOY:
-#   aws ec2 describe-vpcs \
-#     --filters "Name=tag:ResourceType,Values=VPC_n8n" \
-#     --query 'Vpcs[*].{ID:VpcId,CIDR:CidrBlock,State:State}'
-#
-#   aws ec2 describe-nat-gateways \
-#     --filter "Name=tag:ResourceType,Values=NatGateway_n8n" \
-#     --query 'NatGateways[*].{ID:NatGatewayId,State:State}'
-#
-#   aws ec2 describe-security-groups \
-#     --filters "Name=tag:ResourceType,Values=SecurityGroup_n8n" \
-#     --query 'SecurityGroups[*].{Name:GroupName,Role:Tags[?Key==`SGRole`]|[0].Value}'
+# VPC, subnets, IGW, EIP, NAT Gateway proprio, Route Tables, Security Groups
+# CIDRs calculados via cidrsubnet() — portaveis se vpc_cidr mudar
 ###############################################################################
 
 variable "environment" {}
@@ -21,15 +9,17 @@ variable "aws_region"  {}
 variable "vpc_cidr"    {}
 
 locals {
-  azs_all       = ["${var.aws_region}a", "${var.aws_region}b", "${var.aws_region}c"]
-  public_cidrs  = ["10.2.1.0/24",  "10.2.2.0/24",  "10.2.3.0/24"]
-  private_cidrs = ["10.2.11.0/24", "10.2.12.0/24", "10.2.13.0/24"]
-  db_cidrs      = ["10.2.21.0/24", "10.2.22.0/24", "10.2.23.0/24"]
-}
+  azs = ["${var.aws_region}a", "${var.aws_region}b", "${var.aws_region}c"]
 
-###############################################################################
-# VPC
-###############################################################################
+  # CIDRs derivados de vpc_cidr — portaveis para qualquer bloco
+  # vpc_cidr = 10.2.0.0/16
+  # public:   10.2.1.0/24, 10.2.2.0/24, 10.2.3.0/24
+  # private:  10.2.11.0/24, 10.2.12.0/24, 10.2.13.0/24
+  # database: 10.2.21.0/24, 10.2.22.0/24, 10.2.23.0/24
+  public_cidrs  = [for i in [1, 2, 3]   : cidrsubnet(var.vpc_cidr, 8, i)]
+  private_cidrs = [for i in [11, 12, 13] : cidrsubnet(var.vpc_cidr, 8, i)]
+  db_cidrs      = [for i in [21, 22, 23] : cidrsubnet(var.vpc_cidr, 8, i)]
+}
 
 resource "aws_vpc" "main" {
   cidr_block           = var.vpc_cidr
@@ -42,15 +32,11 @@ resource "aws_vpc" "main" {
   }
 }
 
-###############################################################################
-# SUBNETS — 3 AZs para HA do RDS Multi-AZ e ALB
-###############################################################################
-
 resource "aws_subnet" "public" {
   count                   = 3
   vpc_id                  = aws_vpc.main.id
   cidr_block              = local.public_cidrs[count.index]
-  availability_zone       = local.azs_all[count.index]
+  availability_zone       = local.azs[count.index]
   map_public_ip_on_launch = true
 
   tags = {
@@ -64,7 +50,7 @@ resource "aws_subnet" "private" {
   count             = 3
   vpc_id            = aws_vpc.main.id
   cidr_block        = local.private_cidrs[count.index]
-  availability_zone = local.azs_all[count.index]
+  availability_zone = local.azs[count.index]
 
   tags = {
     Name         = "n8n-subnet-private-${count.index + 1}-${var.environment}"
@@ -77,7 +63,7 @@ resource "aws_subnet" "database" {
   count             = 3
   vpc_id            = aws_vpc.main.id
   cidr_block        = local.db_cidrs[count.index]
-  availability_zone = local.azs_all[count.index]
+  availability_zone = local.azs[count.index]
 
   tags = {
     Name         = "n8n-subnet-database-${count.index + 1}-${var.environment}"
@@ -85,10 +71,6 @@ resource "aws_subnet" "database" {
     SubnetTier   = "Database"
   }
 }
-
-###############################################################################
-# INTERNET GATEWAY — necessário para ALB em subnets públicas
-###############################################################################
 
 resource "aws_internet_gateway" "main" {
   vpc_id = aws_vpc.main.id
@@ -98,10 +80,6 @@ resource "aws_internet_gateway" "main" {
     ResourceType = "InternetGateway_n8n"
   }
 }
-
-###############################################################################
-# EIP + NAT GATEWAY — outbound dos workers para APIs externas
-###############################################################################
 
 resource "aws_eip" "nat" {
   domain = "vpc"
@@ -123,11 +101,6 @@ resource "aws_nat_gateway" "main" {
 
   depends_on = [aws_internet_gateway.main]
 }
-
-###############################################################################
-# ROUTE TABLES
-# aws_route_table_association não suporta tags (limitação AWS API)
-###############################################################################
 
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
@@ -187,15 +160,10 @@ resource "aws_route_table_association" "database" {
   route_table_id = aws_route_table.database.id
 }
 
-###############################################################################
-# SECURITY GROUPS
-###############################################################################
-
-# ALB — aceita apenas IPs do Cloudflare
-# Lista atualizada em: https://www.cloudflare.com/ips-v4
+# ALB - apenas IPs do Cloudflare
 resource "aws_security_group" "alb" {
   name        = "n8n-sg-alb-${var.environment}"
-  description = "ALB - inbound apenas Cloudflare"
+  description = "ALB inbound Cloudflare only"
   vpc_id      = aws_vpc.main.id
 
   dynamic "ingress" {
@@ -220,7 +188,7 @@ resource "aws_security_group" "alb" {
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
-    description = "Outbound irrestrito"
+    description = "Outbound unrestricted"
   }
 
   tags = {
@@ -232,7 +200,7 @@ resource "aws_security_group" "alb" {
 
 resource "aws_security_group" "ecs_main" {
   name        = "n8n-sg-ecs-main-${var.environment}"
-  description = "n8n main container - inbound do ALB"
+  description = "n8n main container inbound from ALB"
   vpc_id      = aws_vpc.main.id
 
   ingress {
@@ -240,7 +208,7 @@ resource "aws_security_group" "ecs_main" {
     to_port         = 5678
     protocol        = "tcp"
     security_groups = [aws_security_group.alb.id]
-    description     = "Tráfego do ALB"
+    description     = "Traffic from ALB"
   }
 
   egress {
@@ -248,7 +216,7 @@ resource "aws_security_group" "ecs_main" {
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
-    description = "Outbound via NAT Gateway"
+    description = "Outbound via NAT"
   }
 
   tags = {
@@ -260,7 +228,7 @@ resource "aws_security_group" "ecs_main" {
 
 resource "aws_security_group" "ecs_worker" {
   name        = "n8n-sg-ecs-worker-${var.environment}"
-  description = "n8n workers - apenas outbound via NAT"
+  description = "n8n workers outbound only via NAT"
   vpc_id      = aws_vpc.main.id
 
   egress {
@@ -268,7 +236,7 @@ resource "aws_security_group" "ecs_worker" {
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
-    description = "Outbound via NAT Gateway"
+    description = "Outbound via NAT"
   }
 
   tags = {
@@ -280,7 +248,7 @@ resource "aws_security_group" "ecs_worker" {
 
 resource "aws_security_group" "rds" {
   name        = "n8n-sg-rds-${var.environment}"
-  description = "PostgreSQL - inbound apenas ECS"
+  description = "PostgreSQL inbound from ECS only"
   vpc_id      = aws_vpc.main.id
 
   ingress {
@@ -288,7 +256,7 @@ resource "aws_security_group" "rds" {
     to_port         = 5432
     protocol        = "tcp"
     security_groups = [aws_security_group.ecs_main.id, aws_security_group.ecs_worker.id]
-    description     = "Acesso ECS ao PostgreSQL"
+    description     = "ECS access to PostgreSQL"
   }
 
   tags = {
@@ -300,7 +268,7 @@ resource "aws_security_group" "rds" {
 
 resource "aws_security_group" "redis" {
   name        = "n8n-sg-redis-${var.environment}"
-  description = "Redis - inbound de ECS e Lambda de monitoramento"
+  description = "Redis inbound from ECS and Lambda"
   vpc_id      = aws_vpc.main.id
 
   ingress {
@@ -312,7 +280,7 @@ resource "aws_security_group" "redis" {
       aws_security_group.ecs_worker.id,
       aws_security_group.lambda.id
     ]
-    description = "Acesso ECS e Lambda ao Redis"
+    description = "ECS and Lambda access to Redis"
   }
 
   tags = {
@@ -324,7 +292,7 @@ resource "aws_security_group" "redis" {
 
 resource "aws_security_group" "lambda" {
   name        = "n8n-sg-lambda-${var.environment}"
-  description = "Lambda monitoramento - outbound para Redis e CloudWatch"
+  description = "Lambda monitoring outbound to Redis and CloudWatch"
   vpc_id      = aws_vpc.main.id
 
   egress {
@@ -332,7 +300,7 @@ resource "aws_security_group" "lambda" {
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
-    description = "Outbound para Redis e CloudWatch via NAT"
+    description = "Outbound via NAT"
   }
 
   tags = {
@@ -341,10 +309,6 @@ resource "aws_security_group" "lambda" {
     SGRole       = "LambdaMonitoring"
   }
 }
-
-###############################################################################
-# OUTPUTS
-###############################################################################
 
 output "vpc_id"             { value = aws_vpc.main.id }
 output "public_subnet_ids"  { value = aws_subnet.public[*].id }

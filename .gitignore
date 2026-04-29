@@ -2,16 +2,16 @@
 .terraform/
 *.tfstate
 *.tfstate.backup
-.terraform.lock.hcl
 
-# Variáveis sensíveis — nunca versionar
-# EXCEÇÃO: environments/prod/terraform.tfvars é versionado pois contém
-# apenas valores não sensíveis (cloudflare_zone_id, n8n_domain, etc.)
-# Valores sensíveis devem ir para GitHub Secrets
+# .terraform.lock.hcl DEVE ser versionado
+# Garante versao identica do provider em todos os ambientes
+# NAO adicionar .terraform.lock.hcl aqui
+
+# Variaveis locais sensiveis
 *.tfvars.local
 *.auto.tfvars
 
-# Arquivos temporários
+# Temporarios
 /tmp/
 override.tf
 crash.log

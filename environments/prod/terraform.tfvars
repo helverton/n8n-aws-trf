@@ -1,17 +1,14 @@
 ###############################################################################
 # environments/prod/terraform.tfvars
-# Valores não sensíveis para o ambiente de produção.
 #
-# ANTES DO PRIMEIRO APPLY:
-#   1. Confirme que o CIDR não conflita com outros VPCs na conta:
-#      aws ec2 describe-vpcs --query 'Vpcs[*].CidrBlock'
+# ANTES DO APPLY:
+#   1. Confirmar CIDR: aws ec2 describe-vpcs --query 'Vpcs[*].CidrBlock'
+#   2. Preencher cloudflare_zone_id, n8n_domain, alert_email
+#   3. Enviar imagem n8n para ECR e preencher n8n_image
+#      Ver README.md secao "ECR - Preparar imagem n8n"
 #
-#   2. Preencha cloudflare_zone_id e n8n_domain com valores reais.
-#
-# VALORES SENSÍVEIS — nunca neste arquivo, sempre via GitHub Secrets:
-#   N8N_ENCRYPTION_KEY    → openssl rand -hex 32
-#   CLOUDFLARE_API_TOKEN  → token Cloudflare com DNS:Edit
-#   SLACK_WEBHOOK_URL     → opcional
+# SENSIVEIS via GitHub Secrets (nunca neste arquivo):
+#   N8N_ENCRYPTION_KEY, CLOUDFLARE_API_TOKEN, SLACK_WEBHOOK_URL
 ###############################################################################
 
 aws_region  = "us-east-1"
@@ -26,12 +23,12 @@ rds_instance_class = "db.t4g.medium"
 
 redis_node_type = "cache.t3.small"
 
-# IMPORTANTE: fixe sempre a versão — nunca use :latest em produção
-# Verifique a versão mais recente em: https://github.com/n8n-io/n8n/releases
-n8n_image = "n8nio/n8n:latest"
+# Imagem n8n no ECR — preencher apos enviar a imagem
+# Ver README.md secao "ECR - Preparar imagem n8n"
+# Formato: ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/n8n:TAG
+n8n_image = "TROCAR-ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/n8n:1.123.10"
 
-# Preencher com valores reais antes do apply
-cloudflare_zone_id = "SEU-CLOUDFLARE-ZONE-ID"
+cloudflare_zone_id = "TROCAR-SEU-ZONE-ID"
 n8n_domain         = "n8n.seudominio.com"
 
 alert_email = "ops@seudominio.com"

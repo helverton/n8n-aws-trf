@@ -1,13 +1,14 @@
 ###############################################################################
 # MODULE: iam
-# Roles ECS — Execution Role + Task Role (least privilege)
-# Task Role inclui permissão para put-metric-data no namespace N8N/Workflows
+# Execution Role + Task Role para ECS
+# Execution Role inclui permissao de pull ECR privado
 ###############################################################################
 
 variable "environment"      {}
 variable "aws_region"       {}
 variable "account_id"       {}
 variable "logs_bucket_name" {}
+variable "ecr_repo_arn"     {}
 
 resource "aws_iam_role" "ecs_execution" {
   name = "n8n-ecs-execution-role-${var.environment}"
@@ -28,25 +29,43 @@ resource "aws_iam_role" "ecs_execution" {
   }
 }
 
+# Managed policy cobre: ECR pull + CloudWatch Logs
 resource "aws_iam_role_policy_attachment" "ecs_execution_managed" {
   role       = aws_iam_role.ecs_execution.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
+# Permissao para ler secrets do n8n
 resource "aws_iam_role_policy" "ecs_execution_secrets" {
   name = "n8n-ecs-execution-secrets-policy"
   role = aws_iam_role.ecs_execution.id
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Sid    = "ReadN8NSecrets"
-      Effect = "Allow"
-      Action = ["secretsmanager:GetSecretValue", "kms:Decrypt"]
-      Resource = [
-        "arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:n8n/${var.environment}/*"
-      ]
-    }]
+    Statement = [
+      {
+        Sid    = "ReadN8NSecrets"
+        Effect = "Allow"
+        Action = ["secretsmanager:GetSecretValue", "kms:Decrypt"]
+        Resource = [
+          "arn:aws:secretsmanager:${var.aws_region}:${var.account_id}:secret:n8n/${var.environment}/*"
+        ]
+      },
+      {
+        # Permissao explicita para pull do ECR privado
+        # AmazonECSTaskExecutionRolePolicy ja cobre, mas sendo explicito
+        # para garantir acesso ao repositorio especifico
+        Sid    = "ECRPullAccess"
+        Effect = "Allow"
+        Action = [
+          "ecr:GetAuthorizationToken",
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchGetImage"
+        ]
+        Resource = "*"
+      }
+    ]
   })
 }
 
