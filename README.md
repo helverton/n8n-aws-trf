@@ -2,7 +2,7 @@
 
 Infraestrutura completa do n8n na AWS gerenciada por Terraform e implantada via GitHub Actions.
 
-**Stack:** n8n 1.123.4 + Node 22 | PostgreSQL 15.12 | Redis 7 | ECS Fargate | Terraform >= 1.10
+**Stack:** n8n 1.123.10 + Node 22 | PostgreSQL 15.12 | Redis 7 | ECS Fargate | Terraform >= 1.10
 
 ---
 
@@ -35,7 +35,7 @@ ALB (Application Load Balancer)
    Lambda QueueDepth
    (publica N8N/Queue no CloudWatch a cada minuto)
 
-ECR         ──► imagem customizada n8n 1.123.4 + Node 22
+ECR         ──► imagem customizada n8n 1.123.10 + Node 22
 NAT Gateway ──► outbound workers para APIs externas (IP fixo)
 CloudWatch  ──► Log Groups + Alarmes compostos + Dashboard
 S3          ──► logs historicos (export diario automatico)
@@ -228,7 +228,7 @@ FROM node:22-alpine
 
 RUN apk add --no-cache tzdata curl
 
-RUN npm install -g n8n@1.123.4
+RUN npm install -g n8n@1.123.10
 
 ENV NODE_ENV=production
 ENV GENERIC_TIMEZONE=America/Sao_Paulo
@@ -247,14 +247,14 @@ CMD ["start"]
 
 ```bash
 # Build da imagem
-docker build -t n8n:1.123.4 .
+docker build -t n8n:1.123.10 .
 
 # Testar localmente antes de enviar para a AWS
 docker run --rm -p 5678:5678 \
   -e N8N_BASIC_AUTH_ACTIVE=true \
   -e N8N_BASIC_AUTH_USER=admin \
   -e N8N_BASIC_AUTH_PASSWORD=admin123 \
-  n8n:1.123.4
+  n8n:1.123.10
 
 # Acessar http://localhost:5678 e confirmar que o n8n abre corretamente
 # CTRL+C para parar quando terminar o teste
@@ -273,17 +273,17 @@ aws ecr get-login-password --region ${REGION} | \
   docker login --username AWS --password-stdin ${ECR_URL}
 
 # Tag da imagem local com o endereco do ECR
-docker tag n8n:1.123.4 ${ECR_URL}/n8n:1.123.4
+docker tag n8n:1.123.10 ${ECR_URL}/n8n:1.123.10
 
 # Enviar para o ECR
-docker push ${ECR_URL}/n8n:1.123.4
+docker push ${ECR_URL}/n8n:1.123.10
 
 # Verificar que a imagem chegou corretamente
 aws ecr list-images \
   --repository-name n8n \
   --region ${REGION} \
   --query 'imageIds[*].imageTag'
-# Deve retornar: ["1.123.4"]
+# Deve retornar: ["1.123.10"]
 ```
 
 #### 8.5 — Atualizar terraform.tfvars
@@ -291,7 +291,7 @@ aws ecr list-images \
 Edite `environments/prod/terraform.tfvars` e preencha a linha `n8n_image`:
 
 ```hcl
-n8n_image = "SEU_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/n8n:1.123.4"
+n8n_image = "SEU_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/n8n:1.123.10"
 ```
 
 Substitua `SEU_ACCOUNT_ID` pelo numero real da sua conta AWS.
@@ -376,7 +376,7 @@ git add . && git commit -m "chore: atualizar n8n para NOVA_VERSAO"
 - [ ] Verificar IP publico do NAT: `terraform output nat_gateway_ip` — usar para whitelist em APIs externas
 
 ### ECR
-- [ ] `aws ecr list-images --repository-name n8n --region us-east-1 --query 'imageIds[*].imageTag'` → `["1.123.4"]`
+- [ ] `aws ecr list-images --repository-name n8n --region us-east-1 --query 'imageIds[*].imageTag'` → `["1.123.10"]`
 
 ### RDS
 - [ ] `aws rds describe-db-instances --db-instance-identifier n8n-postgres-prod --query 'DBInstances[0].{Status:DBInstanceStatus,MultiAZ:MultiAZ}'` → available, true
