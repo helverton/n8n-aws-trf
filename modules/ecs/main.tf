@@ -240,22 +240,24 @@ resource "aws_ecs_task_definition" "n8n_main" {
     portMappings = [{ containerPort = 5678, protocol = "tcp" }]
 
     environment = [
-      { name = "EXECUTIONS_MODE",        value = "queue" },
-      { name = "N8N_EXECUTIONS_PROCESS", value = "main" },
-      { name = "DB_TYPE",                value = "postgresdb" },
-      { name = "DB_POSTGRESDB_HOST",     value = var.db_host },
-      { name = "DB_POSTGRESDB_PORT",     value = var.db_port },
-      { name = "DB_POSTGRESDB_DATABASE", value = var.db_name },
-      { name = "QUEUE_BULL_REDIS_HOST",  value = var.redis_host },
-      { name = "QUEUE_BULL_REDIS_PORT",  value = "6379" },
-      { name = "N8N_HOST",               value = var.n8n_domain },
-      { name = "N8N_PROTOCOL",           value = "https" },
-      { name = "WEBHOOK_URL",            value = "https://${var.n8n_domain}" },
-      { name = "N8N_METRICS",            value = "true" },
-      { name = "N8N_LOG_LEVEL",          value = "info" },
-      { name = "N8N_LOG_OUTPUT",         value = "console" },
-      { name = "N8N_LOG_FORMAT",         value = "json" },
-      { name = "GENERIC_TIMEZONE",       value = "America/Sao_Paulo" }
+      { name = "EXECUTIONS_MODE",                        value = "queue" },
+      { name = "N8N_EXECUTIONS_PROCESS",                 value = "main" },
+      { name = "DB_TYPE",                                value = "postgresdb" },
+      { name = "DB_POSTGRESDB_SSL",                      value = "true" },
+      { name = "DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED",  value = "false" },
+      { name = "DB_POSTGRESDB_HOST",                     value = var.db_host },
+      { name = "DB_POSTGRESDB_PORT",                     value = var.db_port },
+      { name = "DB_POSTGRESDB_DATABASE",                 value = var.db_name },
+      { name = "QUEUE_BULL_REDIS_HOST",                  value = var.redis_host },
+      { name = "QUEUE_BULL_REDIS_PORT",                  value = "6379" },
+      { name = "N8N_HOST",                               value = var.n8n_domain },
+      { name = "N8N_PROTOCOL",                           value = "https" },
+      { name = "WEBHOOK_URL",                            value = "https://${var.n8n_domain}" },
+      { name = "N8N_METRICS",                            value = "true" },
+      { name = "N8N_LOG_LEVEL",                          value = "info" },
+      { name = "N8N_LOG_OUTPUT",                         value = "console" },
+      { name = "N8N_LOG_FORMAT",                         value = "json" },
+      { name = "GENERIC_TIMEZONE",                       value = "America/Sao_Paulo" }
     ]
 
     secrets = [
@@ -305,19 +307,21 @@ resource "aws_ecs_task_definition" "n8n_worker" {
     command   = ["worker"]
 
     environment = [
-      { name = "EXECUTIONS_MODE",                  value = "queue" },
-      { name = "N8N_EXECUTIONS_PROCESS",           value = "queue" },
-      { name = "N8N_CONCURRENCY_PRODUCTION_LIMIT", value = tostring(var.concurrency_per_worker) },
-      { name = "DB_TYPE",                          value = "postgresdb" },
-      { name = "DB_POSTGRESDB_HOST",               value = var.db_host },
-      { name = "DB_POSTGRESDB_PORT",               value = var.db_port },
-      { name = "DB_POSTGRESDB_DATABASE",           value = var.db_name },
-      { name = "QUEUE_BULL_REDIS_HOST",            value = var.redis_host },
-      { name = "QUEUE_BULL_REDIS_PORT",            value = "6379" },
-      { name = "N8N_LOG_LEVEL",                    value = "info" },
-      { name = "N8N_LOG_OUTPUT",                   value = "console" },
-      { name = "N8N_LOG_FORMAT",                   value = "json" },
-      { name = "GENERIC_TIMEZONE",                 value = "America/Sao_Paulo" }
+      { name = "EXECUTIONS_MODE",                        value = "queue" },
+      { name = "N8N_EXECUTIONS_PROCESS",                 value = "queue" },
+      { name = "N8N_CONCURRENCY_PRODUCTION_LIMIT",       value = tostring(var.concurrency_per_worker) },
+      { name = "DB_TYPE",                                value = "postgresdb" },
+      { name = "DB_POSTGRESDB_SSL",                      value = "true" },
+      { name = "DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED",  value = "false" },
+      { name = "DB_POSTGRESDB_HOST",                     value = var.db_host },
+      { name = "DB_POSTGRESDB_PORT",                     value = var.db_port },
+      { name = "DB_POSTGRESDB_DATABASE",                 value = var.db_name },
+      { name = "QUEUE_BULL_REDIS_HOST",                  value = var.redis_host },
+      { name = "QUEUE_BULL_REDIS_PORT",                  value = "6379" },
+      { name = "N8N_LOG_LEVEL",                          value = "info" },
+      { name = "N8N_LOG_OUTPUT",                         value = "console" },
+      { name = "N8N_LOG_FORMAT",                         value = "json" },
+      { name = "GENERIC_TIMEZONE",                       value = "America/Sao_Paulo" }
     ]
 
     secrets = [

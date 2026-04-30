@@ -187,6 +187,7 @@ Settings → Secrets and variables → Actions → New repository secret:
    - ✅ Require status checks to pass
 3. Settings → Environments → New environment: `production`
    - O apply so executa apos aprovacao neste environment
+4. Add new branch feat
 
 ### 8. ECR — Preparar imagem n8n
 
@@ -318,12 +319,15 @@ git init
 git remote add origin https://github.com/SEU-USUARIO/n8n-infra.git
 git add .
 git commit -m "feat: infraestrutura inicial n8n AWS"
-git push -u origin main
+git push -u origin feat
 ```
 
 O GitHub Actions executa automaticamente:
 1. `terraform validate` — verifica sintaxe
+  >>> Validate sucesso? Sim, PR + merge na main
 2. `terraform apply` — aplica na AWS (requer aprovacao do environment `production`)
+
+ 
 
 > **Tempo estimado:** 20-30 minutos. RDS Multi-AZ e ElastiCache sao lentos para provisionar.
 > Acompanhe pelo console AWS ou pelos logs do GitHub Actions.
@@ -332,12 +336,12 @@ O GitHub Actions executa automaticamente:
 
 ```bash
 # 1. Criar branch para a mudanca
-git checkout -b feat/ajuste
+git checkout -b feat2/ajuste
 
 # 2. Editar arquivo
 # 3. Commitar e subir
-git add . && git commit -m "feat: descricao da mudanca"
-git push origin feat/ajuste
+git add . && git commit -m "feat2: descricao da mudanca"
+git push origin feat2/ajuste
 
 # 4. Abrir Pull Request → GitHub Actions mostra o plan no PR
 # 5. Revisar o plan, aprovar e fazer merge → apply automatico
